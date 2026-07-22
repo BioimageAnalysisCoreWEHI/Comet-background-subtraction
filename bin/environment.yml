@@ -1,0 +1,33 @@
+---
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nf-core/modules/master/modules/environment-schema.json
+#
+# Conda environment for the Comet-background-subtraction pipeline.
+#
+# Provides BOTH pipeline steps in a single env:
+#   * comet_markers.py  -> needs tifffile + pandas (stdlib ElementTree for XML)
+#   * backsub           -> installed from git tag v0.5.2 (the first packaged, pip-installable
+#                          release; identical CLI/formula to the v0.4.1 container). Exposes the
+#                          `backsub` console command via [project.scripts].
+#
+# The conda deps below pre-satisfy backsub's requirements so pip only builds the backsub package
+# itself. Versions mirror the upstream backsub environment.yml for reproducibility.
+name: comet_backsub
+channels:
+  - conda-forge
+  - nodefaults
+dependencies:
+  - python=3.12
+  - pandas=2.3.1
+  - tifffile=2025.6.11
+  - scikit-image=0.25.2
+  - dask=2025.7.0
+  - dask-image=2024.5.3
+  - ome-types=0.6.0
+  - numpy=2.3.2
+  - zarr=3.1.1
+  - imagecodecs=2026.3.6
+  - loguru=0.7.3
+  - psutil=7.2.2
+  - pip
+  - pip:
+      - "backsub @ git+https://github.com/schapirolabor/background_subtraction.git@v0.5.2"

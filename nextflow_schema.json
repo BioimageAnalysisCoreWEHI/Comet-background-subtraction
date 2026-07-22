@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/BioimageAnalysisCoreWEHI/Comet-background-subtraction/main/nextflow_schema.json",
+  "title": "Comet-background-subtraction pipeline parameters",
+  "description": "Headless background subtraction of Lunaphore COMET OME-TIFFs (Horizon auto mode) for QuPath",
+  "type": "object",
+  "$defs": {
+    "input_output_options": {
+      "title": "Input/output options",
+      "type": "object",
+      "required": ["outdir"],
+      "description": "Provide exactly one of 'input' (samplesheet) or 'input_dir' (directory glob).",
+      "properties": {
+        "input": {
+          "type": "string",
+          "format": "file-path",
+          "exists": true,
+          "pattern": "^\\S+\\.csv$",
+          "description": "Samplesheet CSV with columns: sample_id,image_path[,remove]. 'remove' is an optional ';' or '|' separated list of marker names to drop from that image."
+        },
+        "input_dir": {
+          "type": "string",
+          "format": "directory-path",
+          "exists": true,
+          "description": "Directory containing raw COMET images (*.tif / *.tiff / *.ome.tif). One job per file; sample_id is the filename stem. Convenience alternative to --input."
+        },
+        "outdir": {
+          "type": "string",
+          "format": "directory-path",
+          "description": "Output directory for background-subtracted OME-TIFFs, markers CSVs and pipeline_info."
+        },
+        "publish_dir_mode": {
+          "type": "string",
+          "default": "copy",
+          "description": "Method used by Nextflow publishDir to stage output files.",
+          "enum": ["symlink", "rellink", "link", "copy", "copyNoFollow", "move"]
+        }
+      }
+    },
+    "marker_detection_options": {
+      "title": "Marker detection options",
+      "type": "object",
+      "description": "Controls how comet_markers.py derives the backsub markers CSV from COMET OME-XML.",
+      "properties": {
+        "registration_filter": {
+          "type": "string",
+          "default": "DAPI",
+          "description": "FluorescenceChannel/band used for registration. Channels in this band are references and are never background-subtracted."
+        },
+        "keep_background": {
+          "type": "boolean",
+          "default": false,
+          "description": "Keep autofluorescence / negative-control channels in the output. By default they are flagged remove=TRUE and dropped after subtraction."
+        },
+        "remove_extra_dapi": {
+          "type": "boolean",
+          "default": false,
+          "description": "Flag every registration (DAPI) channel except the first with remove=TRUE."
+        }
+      }
+    },
+    "background_subtraction_options": {
+      "title": "Background subtraction options",
+      "type": "object",
+      "description": "Passed through to schapirolabor/background_subtraction (backsub).",
+      "properties": {
+        "save_ram": {
+          "type": "boolean",
+          "default": true,
+          "description": "Pass -sr to backsub to reduce RAM usage (~50%). Recommended for large COMET slides."
+        },
+        "compression": {
+          "type": "string",
+          "default": "lzw",
+          "enum": ["lzw", "zlib", "deflate", "none"],
+          "description": "Output OME-TIFF compression. 'lzw' is QuPath-friendly."
+        },
+        "tile_size": {
+          "type": "integer",
+          "default": 256,
+          "minimum": 16,
+          "multipleOf": 16,
+          "description": "Pyramid tile size in pixels (must be a multiple of 16)."
+        },
+        "downscale_factor": {
+          "type": "integer",
+          "default": 2,
+          "minimum": 2,
+          "description": "Pyramid downscale factor. Only used when the input image is not already pyramidal."
+        },
+        "pixel_size": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Pixel size in microns/pixel. Taken from image metadata if not provided."
+        }
+      }
+    },
+    "generic_options": {
+      "title": "Generic options",
+      "type": "object",
+      "properties": {
+        "validate_params": {
+          "type": "boolean",
+          "default": true,
+          "hidden": true,
+          "description": "Validate parameters against the schema."
+        },
+        "help": {
+          "type": "boolean",
+          "default": false,
+          "hidden": true,
+          "description": "Display help text."
+        },
+        "version": {
+          "type": "boolean",
+          "default": false,
+          "hidden": true,
+          "description": "Display version and exit."
+        },
+        "monochrome_logs": {
+          "type": "boolean",
+          "default": false,
+          "hidden": true,
+          "description": "Do not use coloured log outputs."
+        }
+      }
+    }
+  },
+  "allOf": [
+    { "$ref": "#/$defs/input_output_options" },
+    { "$ref": "#/$defs/marker_detection_options" },
+    { "$ref": "#/$defs/background_subtraction_options" },
+    { "$ref": "#/$defs/generic_options" }
+  ]
+}

@@ -1,0 +1,16 @@
+# Nextflow
+.nextflow/
+.nextflow.log*
+work/
+results/
+# Python
+__pycache__/
+*.pyc
+# Large data (keep out of git)
+*.tif
+*.tiff
+*.ome.tif
+*.ome.tiff
+Thumbs.db
+tmp/
+.quarto_cache/
