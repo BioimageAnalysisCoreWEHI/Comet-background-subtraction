@@ -284,8 +284,8 @@ Resolved (see Locked decisions at top): input model = both; backsub = v0.5.2 pip
 channels by default. Real metadata validated (§3).
 
 Remaining to confirm:
-1. **compression**: QuPath-friendly `lzw` vs backsub default `zlib`? (export_large uses LZW.)
-   Default proposal: `lzw`, param-exposed.
+1. **compression**: RESOLVED → default `zlib` (user, 2026-07-22). DEFLATE compresses 16-bit
+   microscopy data better than LZW; both lossless, both read by QuPath. Param-exposed.
 2. **Multiple DAPI**: this sample has one DAPI; if other slides re-acquire DAPI per cycle, decide
    whether to drop extra DAPI (canonical `--remove_dapi` keeps only the first). Expose a flag.
 3. **Which same-band background is "correct"** for late TRITC markers when only `TRITC_N1` exists

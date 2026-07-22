@@ -71,9 +71,9 @@
         },
         "compression": {
           "type": "string",
-          "default": "lzw",
+          "default": "zlib",
           "enum": ["lzw", "zlib", "deflate", "none"],
-          "description": "Output OME-TIFF compression. 'lzw' is QuPath-friendly."
+          "description": "Output OME-TIFF compression. 'zlib'/'deflate' (DEFLATE) compresses 16-bit microscopy data better than 'lzw'; all are lossless and read by QuPath."
         },
         "tile_size": {
           "type": "integer",

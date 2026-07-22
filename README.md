@@ -86,7 +86,7 @@ nextflow run main.nf \
 | `--keep_background`     | `false`  | Keep AF / negative-control channels in the output.                         |
 | `--remove_extra_dapi`   | `false`  | Drop every registration (DAPI) channel except the first.                   |
 | `--save_ram`            | `true`   | Pass `-sr` to backsub (~50% less RAM; recommended for large slides).       |
-| `--compression`         | `lzw`    | Output compression: `lzw` / `zlib` / `deflate` / `none`.                   |
+| `--compression`         | `zlib`   | Output compression: `zlib` / `deflate` / `lzw` / `none` (all lossless).    |
 | `--tile_size`           | `256`    | Pyramid tile size (multiple of 16).                                        |
 | `--downscale_factor`    | `2`      | Pyramid downscale factor (non-pyramidal inputs only).                      |
 | `--pixel_size`          | —        | Microns/pixel; taken from metadata if unset.                               |
