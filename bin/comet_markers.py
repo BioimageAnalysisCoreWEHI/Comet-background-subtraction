@@ -64,6 +64,41 @@ def _make_unique(names):
     return out
 
 
+def report_pixel_size(ome_xml):
+    """
+    Print the physical pixel size recorded in the OME-XML (Pixels/@PhysicalSizeX)
+    to stderr so it appears in the pipeline log.
+
+    This is the same field backsub reads via ome_types when -mpp is not supplied,
+    so it reveals the micron/pixel scale QuPath will use downstream. backsub itself
+    only logs that -mpp was omitted, never the value it detected (or its silent
+    fallback to 1 pixel/unit) -- surfacing it here makes a missing/absent scale
+    obvious before the long BACKSUB step finishes.
+    """
+    try:
+        root = ET.fromstring(ome_xml)
+    except ET.ParseError:
+        return
+    pixels = root.find('.//ome:Pixels', NS)
+    if pixels is None:
+        return
+    psx = pixels.attrib.get('PhysicalSizeX')
+    psy = pixels.attrib.get('PhysicalSizeY')
+    unit = pixels.attrib.get('PhysicalSizeXUnit', 'µm')
+    if psx:
+        sys.stderr.write(
+            f"Detected pixel size from OME metadata: PhysicalSizeX={psx} "
+            f"PhysicalSizeY={psy or psx} {unit} "
+            f"(backsub uses this unless --pixel_size is set).\n"
+        )
+    else:
+        sys.stderr.write(
+            "Warning: no PhysicalSizeX in OME metadata; backsub will fall back to "
+            "1 pixel/unit and QuPath measurements will be in pixels, not microns. "
+            "Pass --pixel_size <microns> to set the scale.\n"
+        )
+
+
 def parse_comet_metadata(ome_xml):
     """
     Parse COMET OME-XML into an ordered list of per-channel dicts with keys:
@@ -268,6 +303,7 @@ def main():
 
         df = None
         if ome_xml:
+            report_pixel_size(ome_xml)
             try:
                 records = parse_comet_metadata(ome_xml)
                 records = classify_channels(records, args.registration_filter)
