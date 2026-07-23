@@ -56,6 +56,11 @@
           "type": "boolean",
           "default": false,
           "description": "Flag every registration (DAPI) channel except the first with remove=TRUE."
+        },
+        "use_nearest_background": {
+          "type": "boolean",
+          "default": false,
+          "description": "Use the nearest preceding same-band background of any kind (autofluorescence OR negative-control), matching the canonical backsub algorithm. Default replicates Horizon 'auto' mode: always the same-band autofluorescence (_AF) reference."
         }
       }
     },

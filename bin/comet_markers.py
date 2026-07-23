@@ -5,15 +5,20 @@ Description : Generate a background_subtraction (backsub) compatible markers CSV
               from Lunaphore COMET OME-TIFF metadata.
 
               Replicates Horizon Viewer "auto" background detection: every signal
-              marker is paired with the most recent PRECEDING autofluorescence /
-              negative-control channel acquired in the SAME spectral band
-              (OME-XML ChannelPriv/@FluorescenceChannel). Reference / registration
-              channels (default DAPI) are never subtracted.
+              marker is paired with the same-band AUTOFLUORESCENCE (_AF) reference
+              acquired in the initial AutoFluorescenceCycle (OME-XML
+              ChannelPriv/@FluorescenceChannel gives the band; CyclePriv/@Type gives
+              the cycle kind). Verified against Horizon ground truth: the later
+              negative-control re-acquisitions (*_N1, *_N2) are NOT used as
+              subtraction references. Reference / registration channels (default
+              DAPI) are never subtracted.
 
-              The pairing algorithm is a faithful port of the canonical COMET
-              logic in schapirolabor/background_subtraction
-              (backsub/metadata2markers.py -> assign_background), adapted to read
-              the real COMET private-field schema:
+              Pass --use-nearest-background to instead use the canonical backsub
+              logic (schapirolabor/background_subtraction metadata2markers.py ->
+              assign_background): the nearest PRECEDING same-band background of any
+              kind, which selects the *_N1 / *_N2 blanks for late cycles.
+
+              Reads the real COMET private-field schema:
                 * ChannelPriv is linked to its Channel via @ChannelID
                   (its own @ID is "ChannelPriv:N", NOT "Channel:N");
                 * FluorescenceChannel holds the spectral BAND (DAPI/TRITC/Cy5),
@@ -64,39 +69,33 @@ def _make_unique(names):
     return out
 
 
-def report_pixel_size(ome_xml):
-    """
-    Print the physical pixel size recorded in the OME-XML (Pixels/@PhysicalSizeX)
-    to stderr so it appears in the pipeline log.
+# Unit spellings that mean micrometres (the OME schema default for PhysicalSize*).
+_MICRON_UNITS = {'µm', 'um', 'micron', 'microns', 'micrometer',
+                 'micrometre', 'micrometers', 'micrometres'}
 
-    This is the same field backsub reads via ome_types when -mpp is not supplied,
-    so it reveals the micron/pixel scale QuPath will use downstream. backsub itself
-    only logs that -mpp was omitted, never the value it detected (or its silent
-    fallback to 1 pixel/unit) -- surfacing it here makes a missing/absent scale
-    obvious before the long BACKSUB step finishes.
+
+def detect_pixel_size(ome_xml):
+    """
+    Parse the physical pixel size from OME-XML (Pixels/@PhysicalSizeX/Y and
+    @PhysicalSizeXUnit). Returns (size_x, size_y, unit) as strings.
+
+    The unit defaults to 'µm' when the attribute is absent -- exactly how the OME
+    schema (and therefore ome_types, which backsub uses) resolves it. Returns
+    (None, None, None) when there is no Pixels element or no PhysicalSizeX.
     """
     try:
         root = ET.fromstring(ome_xml)
     except ET.ParseError:
-        return
+        return None, None, None
     pixels = root.find('.//ome:Pixels', NS)
     if pixels is None:
-        return
+        return None, None, None
     psx = pixels.attrib.get('PhysicalSizeX')
+    if not psx:
+        return None, None, None
     psy = pixels.attrib.get('PhysicalSizeY')
     unit = pixels.attrib.get('PhysicalSizeXUnit', 'µm')
-    if psx:
-        sys.stderr.write(
-            f"Detected pixel size from OME metadata: PhysicalSizeX={psx} "
-            f"PhysicalSizeY={psy or psx} {unit} "
-            f"(backsub uses this unless --pixel_size is set).\n"
-        )
-    else:
-        sys.stderr.write(
-            "Warning: no PhysicalSizeX in OME metadata; backsub will fall back to "
-            "1 pixel/unit and QuPath measurements will be in pixels, not microns. "
-            "Pass --pixel_size <microns> to set the scale.\n"
-        )
+    return psx, psy, unit
 
 
 def parse_comet_metadata(ome_xml):
@@ -154,7 +153,9 @@ def parse_comet_metadata(ome_xml):
             'exposure': exposure_by_c.get(i),
             'cycle_id': cycle_id,
             'signal_type': signal_type,
-            'is_background': False,  # filled in by classify_channels
+            'cycle_type': cyc.get('Type'),  # AutoFluorescenceCycle / NegativeControlCycle / ...
+            'is_background': False,   # filled in by classify_channels
+            'is_af_reference': False,  # filled in by classify_channels
         })
     return records
 
@@ -173,6 +174,7 @@ def classify_channels(records, registration_filter):
         band = r['band']
         if band is None:
             r['is_background'] = False
+            r['is_af_reference'] = False
             continue
         if r['signal_type'] is not None:
             r['is_background'] = (r['signal_type'].lower() == 'background'
@@ -181,16 +183,35 @@ def classify_channels(records, registration_filter):
             # Fallback: name contains the band token but is not a registration channel
             r['is_background'] = (band != registration_filter
                                   and band in r['marker_name'])
+        # An autofluorescence reference is a background channel from an
+        # AutoFluorescenceCycle -- the ONLY background Horizon "auto" mode subtracts.
+        # Negative-control re-acquisitions (NegativeControlCycle: *_N1, *_N2) are
+        # backgrounds too, but Horizon does not use them as subtraction references.
+        cyc_type = (r.get('cycle_type') or '').lower()
+        if cyc_type:
+            r['is_af_reference'] = r['is_background'] and cyc_type == 'autofluorescencecycle'
+        else:
+            # Fallback when cycle metadata is absent: AF channels are named '*_AF'.
+            r['is_af_reference'] = r['is_background'] and '_AF' in r['marker_name']
     return records
 
 
-def assign_backgrounds(records, registration_filter):
+def assign_backgrounds(records, registration_filter, use_nearest=False):
     """
-    For each signal marker, assign background = the most recent PRECEDING
-    background/reference channel of the same band. Reference (registration) and
-    background channels themselves get an empty background.
+    For each signal marker, assign its same-band background/reference channel.
 
-    Returns the number of signal markers left without a background (warned).
+    Default policy replicates Lunaphore Horizon Viewer "auto" mode: every signal
+    marker is paired with the same-band AUTOFLUORESCENCE (_AF) reference acquired
+    at the start of the run. The later negative-control re-acquisitions
+    (NegativeControlCycle: *_N1, *_N2) are NOT used as subtraction backgrounds
+    (they are still dropped from the output via `remove`).
+
+    With use_nearest=True, restores the canonical backsub behaviour: the most
+    recent PRECEDING same-band background of ANY kind (autofluorescence OR
+    negative control) -- which picks up the *_N1 / *_N2 channels for late cycles.
+
+    Reference (registration) and background channels themselves get an empty
+    background. Returns the number of signal markers left without a background.
     """
     unmatched = 0
     for r in records:
@@ -200,13 +221,22 @@ def assign_backgrounds(records, registration_filter):
         if band is None or band == registration_filter or r['is_background']:
             r['background'] = ''
             continue
-        # Signal marker: search preceding channels (nearest first) for a same-band
-        # background/reference acquisition.
+
         bg = ''
-        for prev in reversed(records[:r['index']]):
-            if prev['band'] == band and prev['is_background']:
-                bg = prev['marker_name']
-                break
+        if not use_nearest:
+            # Horizon auto mode: nearest preceding same-band autofluorescence reference.
+            for prev in reversed(records[:r['index']]):
+                if prev['band'] == band and prev['is_af_reference']:
+                    bg = prev['marker_name']
+                    break
+        if not bg:
+            # Canonical policy, or fallback when no AF reference exists for this band:
+            # nearest preceding same-band background of any kind.
+            for prev in reversed(records[:r['index']]):
+                if prev['band'] == band and prev['is_background']:
+                    bg = prev['marker_name']
+                    break
+
         if not bg:
             unmatched += 1
             sys.stderr.write(
@@ -280,6 +310,10 @@ def main():
     ap.add_argument('tiff', type=Path, help='Path to the COMET OME-TIFF (header only is read).')
     ap.add_argument('-o', '--output', type=Path, default=None,
                     help='Output CSV path (default: stdout).')
+    ap.add_argument('--pixel-size-out', type=Path, default=None, dest='pixel_size_out',
+                    help='Write the detected micron/pixel size (PhysicalSizeX) to this '
+                         'file, for the pipeline to pass to backsub as -mpp. Empty file '
+                         'if the metadata has no micron-unit pixel size.')
     ap.add_argument('-rf', '--registration-filter', default='DAPI',
                     help='FluorescenceChannel/band used for registration; these '
                          'channels are references and never subtracted.')
@@ -292,6 +326,11 @@ def main():
     ap.add_argument('--remove-extra-dapi', action='store_true',
                     help='Flag every registration (DAPI) channel except the first '
                          'with remove=TRUE.')
+    ap.add_argument('--use-nearest-background', action='store_true',
+                    help='Use the nearest preceding same-band background of ANY kind '
+                         '(autofluorescence OR negative-control), matching the canonical '
+                         'backsub algorithm. Default replicates Horizon "auto" mode: '
+                         'always the same-band autofluorescence (_AF) reference.')
     args = ap.parse_args()
 
     with TiffFile(args.tiff) as tiff:
@@ -302,12 +341,32 @@ def main():
                 ome_xml = desc
 
         df = None
+        pixel_size_um = ''  # micron value written to --pixel-size-out (empty if none)
         if ome_xml:
-            report_pixel_size(ome_xml)
+            psx, psy, unit = detect_pixel_size(ome_xml)
+            if psx and (unit or '').lower() in _MICRON_UNITS:
+                pixel_size_um = psx
+                sys.stderr.write(
+                    f"Detected pixel size from OME metadata: PhysicalSizeX={psx} "
+                    f"PhysicalSizeY={psy or psx} {unit} (will be passed to backsub "
+                    f"as -mpp unless --pixel_size overrides it).\n"
+                )
+            elif psx:
+                sys.stderr.write(
+                    f"Warning: PhysicalSizeXUnit='{unit}' is not micrometres; not "
+                    f"emitting an -mpp value. Set --pixel_size explicitly if needed.\n"
+                )
+            else:
+                sys.stderr.write(
+                    "Warning: no PhysicalSizeX in OME metadata; backsub will fall back "
+                    "to 1 pixel/unit and QuPath measurements will be in pixels, not "
+                    "microns. Pass --pixel_size <microns> to set the scale.\n"
+                )
             try:
                 records = parse_comet_metadata(ome_xml)
                 records = classify_channels(records, args.registration_filter)
-                assign_backgrounds(records, args.registration_filter)
+                assign_backgrounds(records, args.registration_filter,
+                                   use_nearest=args.use_nearest_background)
                 df = build_dataframe(
                     records,
                     registration_filter=args.registration_filter,
@@ -321,6 +380,10 @@ def main():
 
         if df is None:
             df = imagej_fallback(tiff, args.registration_filter)
+
+    # Always write the sidecar (even if empty) so the pipeline output always exists.
+    if args.pixel_size_out:
+        args.pixel_size_out.write_text(pixel_size_um)
 
     if df is None or df.empty:
         raise SystemExit(

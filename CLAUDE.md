@@ -127,20 +127,31 @@ OME-XML differs from the synthetic test fixture in important ways. Real structur
 3. **Cycles classify Signal vs Background** via `CyclePriv/@SignalType` (`Signal` vs `Background`)
    and `@Type` (`AutoFluorescenceCycle` / `NegativeControlCycle` / `StainingElutionCycle`).
 
-### The real "auto mode" rule (canonical — from schapirolabor's `backsub/metadata2markers.py`)
-The authors of backsub (who built it for COMET) use **nearest-preceding same-band background**:
+### The real "auto mode" rule (CORRECTED 2026-07-23 against Horizon ground truth)
+**Horizon "auto" mode pairs every signal marker with the same-band AUTOFLUORESCENCE
+(`_AF`) reference from the initial `AutoFluorescenceCycle` — NOT the nearest preceding
+background.** Confirmed by comparing Horizon's own channel list for the sample (every
+marker shown as `<marker> - TRITC_AF` / `<marker> - Cy5_AF`, incl. all late-cycle
+markers) against our output. The negative-control re-acquisitions (`TRITC_N1`,
+`Cy5_N1`, `Cy5_N2`) are dropped from output but are **not** used as subtraction refs.
+
+Our default (`bin/comet_markers.py`):
 - `marker_name` ← `Channel/@Name` (deduplicate with `_1/_2` suffixes if repeated).
 - `exposure`    ← `Plane/@ExposureTime` (match by `TheC`).
 - `band`        ← `ChannelPriv/@FluorescenceChannel` (via `ChannelID`).
 - **registration filter** (default `DAPI`): channels with `band == DAPI` are references → `background = ""`.
-- A channel is a **background/reference** channel if it is in a `SignalType="Background"` cycle
-  (AF or NegativeControl) — equivalently its name contains the band token (`*_AF`, `*_N1`, ...).
-- For each **signal** marker (a `StainingElutionCycle` channel), `background` = **the most recent
-  preceding channel of the same band that is a background/reference channel**.
+- A channel is a **background** channel if it is in a `SignalType="Background"` cycle
+  (AF or NegativeControl). An **AF reference** additionally has
+  `CyclePriv/@Type == "AutoFluorescenceCycle"` (fallback: name contains `_AF`).
+- For each **signal** marker (a `StainingElutionCycle` channel), `background` = **the nearest
+  preceding same-band AF reference** (falls back to nearest same-band background of any kind
+  only if that band has no AF reference).
 
-Traced on the real file (verified): markers in cycles 1–10 → `TRITC_AF`/`Cy5_AF`; cycles 12–19 →
-`TRITC_N1`/`Cy5_N1`; cycles 21–22 → `Cy5_N2` (TRITC in those late cycles → nearest prior `TRITC_N1`).
-This is what Horizon "auto" effectively does: pick the same-band blank acquired closest before the marker.
+> ⚠️ **Superseded assumption:** earlier notes claimed the canonical
+> nearest-preceding-including-negative-controls rule (from `metadata2markers.py`) matched
+> Horizon. It does NOT — it wrongly assigns `TRITC_N1`/`Cy5_N1`/`Cy5_N2` to the ~14 late-cycle
+> markers. That canonical behaviour is preserved behind the `--use-nearest-background` flag
+> (nextflow param `use_nearest_background`), but is not the default.
 
 > ⚠️ **`../sp_segment/bin/extract_markers.py` is INSUFFICIENT for this real data.** It assumes
 > `FluorescenceChannel` equals a real channel name and would emit `background=TRITC`/`Cy5` (nonexistent
@@ -211,10 +222,15 @@ Two processes per image (nf-core idiom; keeps the markers CSV inspectable/publis
 ```
 
 - **EXTRACT_MARKERS** (`label process_low`): `bin/comet_markers.py <tiff> [--remove-marker X]
-  [--keep-background] [--registration-filter DAPI]` → `<id>_markers.csv`. Deps: tifffile, pandas
-  (stdlib ElementTree for XML). Header-only OME-XML read. Implements the §3 canonical algorithm.
+  [--keep-background] [--registration-filter DAPI] [--use-nearest-background]
+  --pixel-size-out <id>_mpp.txt` → `<id>_markers.csv` + `<id>_mpp.txt`. Deps: tifffile, pandas
+  (stdlib ElementTree for XML). Header-only OME-XML read. Implements the §3 (AF) algorithm and
+  logs + emits the detected micron/pixel size.
 - **BACKSUB** (`label process_backsub`, big RAM/time): `backsub -r <tiff> -m <markers.csv>
-  -o <id>.ome.tif -mo <id>_markers_out.csv [-sr] [-comp lzw] ...`.
+  -o <id>.ome.tif -mo <id>_markers_out.csv [-sr] [-comp lzw] [-mpp <val>] ...`. The `-mpp` value is
+  the explicit `--pixel_size` param if set, else the value detected in EXTRACT_MARKERS
+  (`<id>_mpp.txt`); passing it explicitly makes the micron scale visible in the log instead of
+  relying on backsub's silent metadata read. Only micron-unit scales are auto-passed.
 
 Input model (LOCKED: both):
 - **(B) samplesheet CSV** (primary): `sample_id,image_path[,remove]` for provenance + per-image
@@ -288,8 +304,10 @@ Remaining to confirm:
    microscopy data better than LZW; both lossless, both read by QuPath. Param-exposed.
 2. **Multiple DAPI**: this sample has one DAPI; if other slides re-acquire DAPI per cycle, decide
    whether to drop extra DAPI (canonical `--remove_dapi` keeps only the first). Expose a flag.
-3. **Which same-band background is "correct"** for late TRITC markers when only `TRITC_N1` exists
-   (no `TRITC_N2`): canonical picks nearest *preceding* → `TRITC_N1`. Confirm that matches Horizon.
+3. **Which same-band background is "correct"** for late markers: RESOLVED (2026-07-23) →
+   Horizon uses the initial `_AF` reference for ALL markers, not the negative-control
+   re-acquisitions. Default algorithm now matches; `--use-nearest-background` restores the old
+   behaviour. See corrected §3.
 4. **Run environment**: Nextflow binary not yet on PATH — install/locate before first real run.
 
 ---

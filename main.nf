@@ -32,23 +32,26 @@ process EXTRACT_MARKERS {
     tuple val(sample_id), path(image), val(remove_markers)
 
     output:
-    tuple val(sample_id), path(image), path("${sample_id}_markers.csv"), emit: markers
+    tuple val(sample_id), path(image), path("${sample_id}_markers.csv"), path("${sample_id}_mpp.txt"), emit: markers
 
     script:
     def reg     = params.registration_filter ? "--registration-filter '${params.registration_filter}'" : ""
     def keepbg  = params.keep_background      ? "--keep-background"    : ""
     def rmdapi  = params.remove_extra_dapi    ? "--remove-extra-dapi"  : ""
+    def nearest = params.use_nearest_background ? "--use-nearest-background" : ""
     def rm_args = (remove_markers ?: []).collect { "--remove-marker '${it}'" }.join(' ')
     """
     python ${projectDir}/bin/comet_markers.py \\
         "${image}" \\
-        ${reg} ${keepbg} ${rmdapi} ${rm_args} \\
+        ${reg} ${keepbg} ${rmdapi} ${nearest} ${rm_args} \\
+        --pixel-size-out "${sample_id}_mpp.txt" \\
         -o "${sample_id}_markers.csv"
     """
 
     stub:
     """
     printf 'marker_name,background,exposure,remove\\nDAPI,,25.0,\\n' > ${sample_id}_markers.csv
+    printf '0.28' > ${sample_id}_mpp.txt
     """
 }
 
@@ -65,7 +68,7 @@ process BACKSUB {
     publishDir "${params.outdir}/markers", mode: params.publish_dir_mode, pattern: "*_markers_out.csv"
 
     input:
-    tuple val(sample_id), path(image), path(markers)
+    tuple val(sample_id), path(image), path(markers), path(mpp_file)
 
     output:
     tuple val(sample_id), path("${sample_id}.ome.tif"), emit: image
@@ -73,20 +76,34 @@ process BACKSUB {
     path "versions.yml", emit: versions
 
     script:
-    def save_ram = params.save_ram        ? "-sr"                          : ""
-    def comp     = params.compression     ? "-comp ${params.compression}"  : ""
-    def tile     = params.tile_size       ? "-ts ${params.tile_size}"      : ""
-    def dsf      = params.downscale_factor ? "-dsf ${params.downscale_factor}" : ""
-    def mpp      = params.pixel_size       ? "-mpp ${params.pixel_size}"   : ""
+    def save_ram  = params.save_ram        ? "-sr"                          : ""
+    def comp      = params.compression     ? "-comp ${params.compression}"  : ""
+    def tile      = params.tile_size       ? "-ts ${params.tile_size}"      : ""
+    def dsf       = params.downscale_factor ? "-dsf ${params.downscale_factor}" : ""
+    // Explicit --pixel_size param overrides the value detected from metadata.
+    def mppParam  = params.pixel_size ? "${params.pixel_size}" : ""
     if ("${image}" == "${sample_id}.ome.tif")
         error "Input and output names collide for '${sample_id}'; rename the input or set a different sample_id."
     """
+    # Pixel size: explicit --pixel_size wins; otherwise use the value comet_markers.py
+    # detected from the OME metadata (written to ${mpp_file}). Passed to backsub as -mpp
+    # so the micron scale is explicit and logged rather than silently re-read.
+    MPP="${mppParam}"
+    if [ -z "\$MPP" ] && [ -s "${mpp_file}" ]; then MPP=\$(tr -d '[:space:]' < "${mpp_file}"); fi
+    if [ -n "\$MPP" ]; then
+        MPP_ARG="-mpp \$MPP"
+        echo "BACKSUB using pixel size: -mpp \$MPP (micrometres)"
+    else
+        MPP_ARG=""
+        echo "BACKSUB: no pixel size available; backsub will read metadata / fall back to 1 pixel/unit"
+    fi
+
     backsub \\
         -r "${image}" \\
         -m "${markers}" \\
         -o "${sample_id}.ome.tif" \\
         -mo "${sample_id}_markers_out.csv" \\
-        ${save_ram} ${comp} ${tile} ${dsf} ${mpp}
+        ${save_ram} ${comp} ${tile} ${dsf} \$MPP_ARG
 
     cat <<-END_VERSIONS > versions.yml
     "${task.process}":
