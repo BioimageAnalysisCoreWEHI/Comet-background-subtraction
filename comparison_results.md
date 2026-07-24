@@ -68,3 +68,11 @@ python bin/compare_to_horizon.py "$OURS" "$CTRL" --level auto --save-csv compari
 `bin/compare_to_horizon.py` never loads a whole image (reads channel-by-channel in row
 bands off the pyramid), matches channels by name (stripping Horizon's ` - <bg>` suffix),
 and auto-aligns Horizon's crop within our image via DAPI template matching.
+
+
+## Shape missmatch between original from instrument and image exported from horizon
+Horizon viewer is doing a large undocumented crop of regions with no pixels resulting in exported images having a different shape from original. Example is displayed in below image:
+
+![crop comparison](../comet-background-subtraction/Horizon_undocumented_crop.png)
+
+Therefore it is fine to do background subtraction with Shapiro package.
